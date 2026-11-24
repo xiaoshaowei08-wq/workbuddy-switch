@@ -41,6 +41,7 @@ xattr -rd com.apple.quarantine "/Applications/workbuddy-switch.app"
 | 关联会话 | 复制过的会话自动建立跨账号关联；按客户端集中查看同一会话在各账号中的副本状态，支持增量同步、分歧处理与新增 / 解除关联 |
 | 积分到期查询 | 自动查询每个账号的积分剩余量与到期时间；7 天内到期高亮，并按紧迫程度排序、标注「建议优先使用」 |
 | 积分统计 | 汇总官方请求用量：总览、近 30 天趋势、模型分类、账号消耗与请求明细 |
+| 自动签到 | 侧栏独立页面：按账号核验状态并补签，可设置签到时间段、逐账号开关；自动旅行按官方状态派发与领取奖励，附今日旅行状态与签到日志 |
 | Token 统计 | 按来源查看 Token 总览与趋势，含构成占比、活跃热力图、项目/模型 Top 10 与会话排行 |
 | CodeBuddy CLI | 与 WorkBuddy 复用同一账号库，默认账号独立；切换后立即生效，无需重启 CLI |
 | CodeBuddy IDE | 支持切换 CodeBuddy IDE 桌面客户端账号，并可在弹窗中勾选复制会话，与 CodeBuddy CLI 相互独立 |
@@ -90,12 +91,24 @@ CodeBuddy CLI 切换时会先关闭正在运行的 CLI，当前会话会中断�
 
 1. **添加与导出账号**：账号页 →「OAuth 扫码登录」「导入备份」；「导出」可将勾选账号备份为 JSON
 2. **切换账号与账号信息**：账号卡片 →「切换」，可勾选复制当前会话；「账号信息」可给账号添加备注，并选择卡片上显示账号名 / 手机号 / 备注
-3. **查看积分与统计**：账号页自动查询各账号积分到期情况，点「刷新积分」手动更新；侧栏进入「积分统计」「Token 统计」查看用量明细
+3. **查看积分与统计**：账号页自动查询各账号积分到期情况，点「刷新积分」手动更新；侧栏进入「积分统计」「Token 统计」查看用量明细，侧栏「自动签到」可配置补签、查看今日旅行状态与签到日志
 4. **切换各客户端账号**：CodeBuddy CLI、CodeBuddy IDE、VS Code CodeBuddy 插件均可在账号卡片一键切换；CodeBuddy IDE 与 VS Code 插件支持在弹窗中勾选复制当前账号的会话。CodeBuddy IDE 首次使用前需先手动打开并登录一次
 5. **管理关联会话**：侧栏「关联会话」按客户端查看同一会话在各账号中的副本状态，把新增内容增量同步到目标账号、处理内容分歧；「新增关联会话」可把会话复制到新账号并建立关联
 6. **开关各端入口**：设置 →「支持工具」可按客户端逐个开启 / 关闭入口；关闭后该端在账号页隐藏、不再轮询状态，不影响账号库。JetBrains 端默认关闭
 7. **自动轮换**：设置 → CodeBuddy CLI 自动轮换，开启后按积分紧迫程度自动设置默认账号
 8. **更新**：应用会自动检查公开 GitHub Releases；发现新版本后可在左下角直接升级，也可从设置页打开 Release 页面手动下载
+
+### 本地开发：启动即用最新源码
+
+57890 后台服务由 `com.wbswitch.server`（LaunchAgent）常驻，`WorkBuddySwitch.app` 在端口已占用时只负责打开页面。为了让每次启动都跑最新代码，启动链路改成：
+
+- 全局包 `bin/wb-switch-darwin-arm64` 是入口包装，转交项目 `scripts/serve-latest.sh`；
+- 脚本比较源码时间戳：有变化先 `npm run build` + `cargo build --release -p wb-switch-server`，再用 `target/release/wb-switch` 启动；无变化直接复用产物，秒起；
+- 前端资源由 `rust_embed` **编译时**内嵌进二进制，只改 `dist/` 而不重编译是无效的，顺序不能反；
+- 打开 `.app` 时若检测到源码更新，会自动 `kickstart` 重启服务触发重建；也可手动跑 `scripts/serve-latest.sh --build-only`；
+- 构建失败自动回退到 `bin/wb-switch-darwin-arm64.real`（已安装二进制），服务不会起不来；
+- 日志 `~/.wb-switch/serve-latest.log`，状态戳 `~/.wb-switch/serve-latest.stamp`；
+- 全局包被 `npm i -g workbuddy-switch` 覆盖后，重跑 `scripts/install-serve-latest.sh` 恢复入口。
 
 ## 界面预览
 

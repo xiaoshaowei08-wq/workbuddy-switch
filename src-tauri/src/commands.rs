@@ -1165,6 +1165,18 @@ pub fn save_auto_travel_config(config: Value) -> Result<Value, String> {
     Ok(saved)
 }
 
+/// POST /api/travel/dispatch —— 手动「全部立即派发」，忽略自动旅行开关强制跑一轮。
+#[tauri::command]
+pub async fn dispatch_travel_all() -> Value {
+    travel::dispatch_travel_now().await
+}
+
+/// GET /api/travel/overview —— 今日派发进度与每账号旅行状态（纯本地只读）。
+#[tauri::command]
+pub fn get_travel_overview() -> Value {
+    crate::modules::travel::travel_overview()
+}
+
 // ---------------------------------------------------------------------------
 // 自动轮换（CodeBuddy CLI）
 // ---------------------------------------------------------------------------

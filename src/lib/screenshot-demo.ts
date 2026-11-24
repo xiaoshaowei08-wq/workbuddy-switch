@@ -3,7 +3,7 @@ import type {
   CodeBuddyCliStatus, CodeBuddyCliSwitchResult, CodeBuddyCnIdeStatus, CreditExpiry, CreditOfficialUsageModel, CreditStatistics,
   DisplayField,
   GithubConfig, RateLimitHookStatus, RateLimitsPayload, RotateLog, RotateStatus, TokenStatistics, TokenStatsGroup, TokenStatsRequestRow, TokenStatsSource, TokenStatsTotals,
-  Session, SessionLinkPreviewGroup, SessionLinksPreview, SessionSyncVerdict, SessionGroupClient, SessionGroupSummary, SessionGroupDetail, SessionGroupList, SessionGroupPairPreview, SessionMemberVersionStatus, TravelConfig, TravelStatus, VscodeExtStatus, VscodeSessionList,
+  Session, SessionLinkPreviewGroup, SessionLinksPreview, SessionSyncVerdict, SessionGroupClient, SessionGroupSummary, SessionGroupDetail, SessionGroupList, SessionGroupPairPreview, SessionMemberVersionStatus, TravelConfig, TravelOverview, TravelStatus, VscodeExtStatus, VscodeSessionList,
 } from "./types";
 import { demoModeEnabled } from "./demo-mode";
 import { accountVariant, normalizeVariant, variantSupportsCheckin } from "./variant";
@@ -447,6 +447,44 @@ function travelStatus(accountId: string): TravelStatus {
   if (index % 3 === 0) return { label: "traveling", rewardCredit: 7, locationName: "咖啡馆", arriveAt: Math.floor(Date.now() / 1000) + 2 * 3600 + 40 * 60 };
   if (index % 3 === 1) return { label: "finished", rewardCredit: 20, locationName: "健身房" };
   return { label: "no-buddy", rewardCredit: null, locationName: null };
+}
+
+function travelOverview(): TravelOverview {
+  const list = accounts
+    .filter((account) => account.variant !== "ai")
+    .map((account) => {
+      const status = travelStatus(account.id);
+      const arriveAt = status.arriveAt ?? null;
+      return {
+        accountId: account.id,
+        email: account.nickname ?? account.email ?? account.id,
+        label: status.label,
+        locationName: status.locationName ?? null,
+        rewardCredit: status.rewardCredit,
+        arriveAt,
+        departAt: status.label === "traveling" && arriveAt ? arriveAt - 3 * 3600 : null,
+        already: false,
+        claimed: status.label === "finished",
+        message: null,
+        skip: status.label === "no-buddy" ? "no-buddy" : null,
+      };
+    });
+  return {
+    enabled: true,
+    date: new Date().toISOString().slice(0, 10),
+    completed: false,
+    lastUpdatedAt: Date.now() - 60 * 1000,
+    dispatchIntervalMinutes: 30,
+    claimIntervalMinutes: 15,
+    summary: {
+      total: list.length,
+      traveling: list.filter((a) => a.label === "traveling").length,
+      finished: list.filter((a) => a.label === "finished").length,
+      noBuddy: list.filter((a) => a.label === "no-buddy").length,
+      untraveled: list.filter((a) => a.label === "untraveled").length,
+    },
+    accounts: list,
+  };
 }
 
 /**
@@ -965,6 +1003,7 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
     case "get_auto_checkin_config": return checkinConfig();
     case "get_checkin_logs": return { logs: checkinLogs() };
     case "get_travel_status": return travelStatus(String(args?.accountId ?? ""));
+    case "get_travel_overview": return travelOverview();
     case "get_rate_limits": return rateLimits();
     case "get_rate_limit_hook_status": return rateLimitHookStatus();
     case "get_rate_limit_config": return { enabled: true };

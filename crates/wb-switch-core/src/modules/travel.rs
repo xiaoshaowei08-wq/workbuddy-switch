@@ -841,13 +841,28 @@ async fn sync_account_for_dispatch(account: &Value, prior: Option<&Value>) -> Va
     }
 }
 
+/// 后台自动轮次：仅当「启用自动旅行」打开时派发。
+///
 /// 对所有账号依次派猫猫旅行（每日缓存幂等；存在可重试项时不标记当日完成）。
 pub async fn run_travel_cycle() -> Value {
+    travel_cycle_impl(false).await
+}
+
+/// 手动「全部立即派发」：忽略自动旅行开关，强制跑一轮。
+///
+/// 与后台轮次共用 `TRAVEL_RUNNING` 互斥，避免同一账号被并发派发；不改动开关配置，
+/// 也不影响后台 30 分钟补派 / 15 分钟领奖循环。
+pub async fn dispatch_travel_now() -> Value {
+    travel_cycle_impl(true).await
+}
+
+/// 派发主体：`force=true` 跳过 enabled 检查（手动按钮），其余与后台轮次完全一致。
+async fn travel_cycle_impl(force: bool) -> Value {
     let Some(_guard) = RunFlagGuard::try_acquire(&TRAVEL_RUNNING) else {
         return json!({"status": "skipped", "reason": "already_running"});
     };
     let cfg = load_travel_config();
-    if cfg.get("enabled").and_then(Value::as_bool) != Some(true) {
+    if !force && cfg.get("enabled").and_then(Value::as_bool) != Some(true) {
         return json!({"status": "disabled"});
     }
     let accounts = load_accounts();
@@ -1047,6 +1062,103 @@ pub fn travel_display(account_id: &str) -> Value {
         display_record("untraveled", &json!({}))
     } else {
         display_record(label, r)
+    }
+}
+
+/// 只读汇总：设置页展示今日派发进度、每账号旅行倒计时与后台循环节奏。
+///
+/// 只读取 `travel_cache.json` 与账号库，不发网络请求、不写缓存。时间统一输出为
+/// 秒（缓存里的 `at` 是毫秒），前端按 `arriveAt` 自己算实时倒计时与进度条，
+/// 避免后端快照在页面停留期间过期。`already=true`（网页端先派出）时出发点
+/// 只是本工具观察到的时刻，前端不据此画进度条。
+pub fn travel_overview() -> Value {
+    let enabled = load_travel_config()
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let today = today_str();
+    let cache = load_travel_cache();
+    let same_day = cache.get("date").and_then(Value::as_str) == Some(today.as_str());
+    let results = cache_results(&cache).cloned().unwrap_or_default();
+
+    let mut last_updated_at = 0_i64;
+    let mut traveling = 0_i64;
+    let mut finished = 0_i64;
+    let mut no_buddy = 0_i64;
+    let mut untraveled = 0_i64;
+
+    let mut accounts: Vec<Value> = travel_capable_accounts(load_accounts())
+        .iter()
+        .map(|acc| {
+            let id = account_key(acc);
+            let has_entry = results.contains_key(&id);
+            let entry = results.get(&id).cloned().unwrap_or_else(|| json!({}));
+            let label = if has_entry {
+                display_label(same_day, &entry)
+            } else {
+                "untraveled"
+            };
+            match label {
+                "traveling" => traveling += 1,
+                "finished" => finished += 1,
+                "no-buddy" => no_buddy += 1,
+                _ => untraveled += 1,
+            }
+
+            let at_ms = entry.get("at").and_then(Value::as_i64).unwrap_or(0);
+            last_updated_at = last_updated_at.max(at_ms);
+            let arrive_at = entry.get("arriveAt").and_then(Value::as_i64).unwrap_or(0);
+            let credit = entry
+                .get("rewardCredit")
+                .and_then(Value::as_i64)
+                .filter(|c| *c > 0);
+            json!({
+                "accountId": id,
+                "email": account_display_name(acc),
+                "label": label,
+                "locationName": nonempty_str(entry.get("locationName").unwrap_or(&Value::Null))
+                    .map(str::to_string),
+                "rewardCredit": credit.map(|c| json!(c)).unwrap_or(Value::Null),
+                "arriveAt": opt_secs(Some(arrive_at)),
+                "departAt": opt_secs(Some(at_ms / 1000)),
+                "already": entry.get("already").and_then(Value::as_bool).unwrap_or(false),
+                "claimed": result_claimed(&entry),
+                "message": entry.get("message").and_then(Value::as_str).map(str::to_string),
+                "skip": entry.get("skip").and_then(Value::as_str).map(str::to_string),
+            })
+        })
+        .collect();
+
+    let rank = |label: &str| match label {
+        "traveling" => 0,
+        "finished" => 1,
+        "no-buddy" => 2,
+        _ => 3,
+    };
+    accounts.sort_by_key(|a| rank(a.get("label").and_then(Value::as_str).unwrap_or("")));
+
+    json!({
+        "enabled": enabled,
+        "date": cache.get("date").and_then(Value::as_str).unwrap_or(today.as_str()),
+        "completed": cache.get("completed").and_then(Value::as_bool).unwrap_or(false),
+        "lastUpdatedAt": if last_updated_at > 0 { json!(last_updated_at) } else { Value::Null },
+        "dispatchIntervalMinutes": TRAVEL_RETRY_INTERVAL.as_secs() / 60,
+        "claimIntervalMinutes": TRAVEL_CLAIM_INTERVAL.as_secs() / 60,
+        "summary": {
+            "total": accounts.len(),
+            "traveling": traveling,
+            "finished": finished,
+            "noBuddy": no_buddy,
+            "untraveled": untraveled,
+        },
+        "accounts": accounts,
+    })
+}
+
+fn opt_secs(value: Option<i64>) -> Value {
+    match value.filter(|v| *v > 0) {
+        Some(v) => json!(v),
+        None => Value::Null,
     }
 }
 

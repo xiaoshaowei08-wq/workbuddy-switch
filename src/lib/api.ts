@@ -41,6 +41,7 @@ import type {
   SessionGroupActionReport,
   SwitchResult,
   TravelConfig,
+  TravelOverview,
   TravelStatus,
   UpdateInfo,
   UpdateSnapshot,
@@ -67,7 +68,7 @@ const DEMO_READ_COMMANDS = new Set([
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
   "get_github_config", "check_update", "get_launch_at_login_enabled", "switch_progress",
-  "get_travel_status", "get_auto_travel_config", "get_rate_limits",
+  "get_travel_status", "get_travel_overview", "get_auto_travel_config", "get_rate_limits",
   "get_rate_limit_hook_status", "get_rate_limit_config",
 ]);
 
@@ -180,8 +181,10 @@ const ROUTES: Record<string, Route> = {
   record_notification: { method: "POST", path: "/api/notifications/record" },
   clear_notifications: { method: "POST", path: "/api/notifications/clear" },
   get_travel_status: { method: "GET", path: "/api/travel/status" },
+  get_travel_overview: { method: "GET", path: "/api/travel/overview" },
   get_auto_travel_config: { method: "GET", path: "/api/travel/config" },
   save_auto_travel_config: { method: "POST", path: "/api/travel/config" },
+  dispatch_travel_all: { method: "POST", path: "/api/travel/dispatch" },
   get_auto_rotate_config: { method: "GET", path: "/api/rotate/config" },
   save_auto_rotate_config: { method: "POST", path: "/api/rotate/config" },
   rotate_status: { method: "GET", path: "/api/rotate/status" },
@@ -930,6 +933,35 @@ export async function getTravelStatus(accountId: string): Promise<TravelStatus> 
       : { label: "untraveled", rewardCredit: null, locationName: null, arriveAt: null };
   }
   return call("get_travel_status", { accountId });
+}
+
+/** 只读：今日派发进度与每账号旅行状态（本地缓存快照，不发官方请求）。 */
+export function getTravelOverview(): Promise<TravelOverview> {
+  return call("get_travel_overview");
+}
+
+/** 「全部立即派发」的逐账号结果（对应 core `dispatch_travel_now` 返回体）。 */
+export interface TravelDispatchAccount {
+  accountId: string;
+  email: string;
+  result: "success" | "error";
+  skip: string | null;
+  message: string | null;
+}
+
+export interface TravelDispatchResult {
+  status: string;
+  reason?: string;
+  completed?: boolean;
+  accounts?: TravelDispatchAccount[];
+}
+
+/**
+ * 手动立即派发一轮派猫猫旅行：不受「启用自动旅行」开关约束，与后台轮次共用互斥锁。
+ * 与 `checkinAll` 同属写操作，演示模式下由 `DemoAction` 拦截，不会走到这里。
+ */
+export function dispatchTravelAll(): Promise<TravelDispatchResult> {
+  return call("dispatch_travel_all");
 }
 
 export function getAutoTravelConfig(): Promise<TravelConfig> {

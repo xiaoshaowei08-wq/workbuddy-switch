@@ -476,6 +476,42 @@ export interface TravelStatus {
   arriveAt?: number | null;
 }
 
+/** 单个账号的今日旅行进度（时刻均为 Unix 秒）。 */
+export interface TravelAccountProgress {
+  accountId: string;
+  email: string;
+  label: TravelStatusLabel;
+  locationName: string | null;
+  rewardCredit: number | null;
+  arriveAt: number | null;
+  /** 本工具观察到 / 派发的时刻；already=true 时不是真实出发时刻，不应据此算进度。 */
+  departAt: number | null;
+  /** 该行程由网页端先派出，本工具只观察到状态。 */
+  already: boolean;
+  claimed: boolean;
+  message: string | null;
+  skip: string | null;
+}
+
+/** 设置页「自动旅行」状态面板的只读快照。 */
+export interface TravelOverview {
+  enabled: boolean;
+  date: string;
+  completed: boolean;
+  /** 最近一次缓存写入时间（Unix 毫秒）；无记录时为 null。 */
+  lastUpdatedAt: number | null;
+  dispatchIntervalMinutes: number;
+  claimIntervalMinutes: number;
+  summary: {
+    total: number;
+    traveling: number;
+    finished: number;
+    noBuddy: number;
+    untraveled: number;
+  };
+  accounts: TravelAccountProgress[];
+}
+
 /** 单个受限模型；`model` 为 null 表示日志里归因不到模型（显示「未知模型」，不猜测）。 */
 export interface RateLimitEntry {
   model: string | null;

@@ -206,6 +206,8 @@ pub fn router() -> Router {
         .route("/api/notifications/record", post(api_record_notification))
         .route("/api/notifications/clear", post(api_clear_notifications))
         .route("/api/travel/status", get(api_travel_status))
+        .route("/api/travel/overview", get(api_travel_overview))
+        .route("/api/travel/dispatch", post(api_dispatch_travel))
         .route(
             "/api/travel/config",
             get(api_travel_config).post(api_save_travel_config),
@@ -1534,6 +1536,11 @@ async fn api_travel_status() -> Response {
     json_ok(json!({ "accounts": items }))
 }
 
+/// GET /api/travel/overview —— 设置页的今日进度面板，只读本地缓存 + 账号库。
+async fn api_travel_overview() -> Response {
+    json_ok(travel::travel_overview())
+}
+
 async fn api_travel_config() -> Response {
     json_ok(config::load_travel_config())
 }
@@ -1553,6 +1560,14 @@ async fn api_save_travel_config(Json(body): Json<Value>) -> Response {
         }
         Err(e) => json_err(e.to_string(), StatusCode::BAD_REQUEST),
     }
+}
+
+/// POST /api/travel/dispatch —— 设置页「全部立即派发」。
+///
+/// 手动触发时忽略自动旅行开关（`dispatch_travel_now` 内部 force），与后台轮次共用
+/// 互斥锁；返回本轮逐账号结果，前端据此提示并刷新今日状态面板。
+async fn api_dispatch_travel() -> Response {
+    json_ok(travel::dispatch_travel_now().await)
 }
 
 async fn api_refresh_token(Json(body): Json<Value>) -> Response {
