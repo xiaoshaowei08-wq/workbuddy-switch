@@ -22,6 +22,8 @@ import type {
   ImportPreviewAccount,
   ImportResult,
   OAuthPollResult,
+  AutomationItem,
+  AutomationSelection,
   OAuthStartResult,
   RateLimitConfig,
   RateLimitHookStatus,
@@ -68,6 +70,7 @@ const DEMO_READ_COMMANDS = new Set([
   "get_token_statistics",
   "get_checkin_logs", "get_auto_rotate_config", "rotate_status", "get_rotate_logs",
   "get_github_config", "check_update", "get_launch_at_login_enabled", "switch_progress",
+  "list_automations",
   "get_travel_status", "get_travel_overview", "get_auto_travel_config", "get_rate_limits",
   "get_rate_limit_hook_status", "get_rate_limit_config",
 ]);
@@ -144,6 +147,7 @@ const ROUTES: Record<string, Route> = {
   preview_import_accounts: { method: "POST", path: "/api/import/preview" },
   import_accounts: { method: "POST", path: "/api/import" },
   switch_account: { method: "POST", path: "/api/switch" },
+  list_automations: { method: "GET", path: "/api/automations" },
   list_sessions: { method: "GET", path: "/api/sessions" },
   list_account_sessions: { method: "GET", path: "/api/sessions/account" },
   copy_sessions: { method: "POST", path: "/api/sessions/copy" },
@@ -549,8 +553,24 @@ export function switchAccount(args: {
   shareSessions?: boolean;
   copySessionIds?: string[];
   syncSelections?: SessionSyncSelection[];
+  automationSelections?: AutomationSelection[];
 }): Promise<SwitchResult> {
   return call("switch_account", args as unknown as Record<string, unknown>);
+}
+
+/**
+ * 当前账号可见的定时任务。
+ *
+ * 任务的归属决定谁能看到、谁能到点执行；切号不会自动带走，切号弹窗据此给出勾选项。
+ * 传 `uid` 时列出该账号可见的任务，用来把「目标已有」的项默认排除在勾选之外。
+ */
+export function listAutomations(variant?: WbVariant, uid?: string | null): Promise<{
+  current: string | null;
+  automations: AutomationItem[];
+}> {
+  const args = variantArgs(variant);
+  if (!uid?.trim()) return call("list_automations", args);
+  return call("list_automations", { ...(args ?? {}), uid: uid.trim() });
 }
 
 /** 切换进度（webui 轮询用；桌面端走事件，此函数无副作用）。 */

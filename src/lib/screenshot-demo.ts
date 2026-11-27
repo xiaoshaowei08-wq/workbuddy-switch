@@ -852,6 +852,19 @@ export function screenshotDemoResponse(command: string, args?: Record<string, un
         variant: accountVariant(account),
       };
     }
+    // 切号弹窗的定时任务 tab：三条演示任务（启用 / 暂停 / 一次性过期各一条）。
+    // 带 uid 的「目标账号」查询返回空列表，演示模式保持三条任务可勾选。
+    case "list_automations": {
+      const uid = String(args?.uid ?? "");
+      return {
+        current: uid || demoAccounts[0].uid,
+        automations: uid ? [] : [
+          { id: "demo-auto-checkin", definitionKey: "demo-checkin", needsNotificationUpgrade: false, name: "每天 8 点领取 WorkBuddy 积分", prompt: "", status: "ACTIVE", scheduleType: "recurring", rrule: "FREQ=DAILY;BYHOUR=8;BYMINUTE=0", scheduledAt: null, nextRunAt: atLocalTime(0, 8, 0), lastRunAt: atLocalTime(1, 8, 0), cwd: "/demo/WorkBuddy/checkin", workspaceScope: "task", spaceId: null },
+          { id: "demo-auto-report", definitionKey: "demo-report-18", needsNotificationUpgrade: false, name: "Codex 额度快报 18:00", prompt: "", status: "ACTIVE", scheduleType: "recurring", rrule: "FREQ=DAILY;BYHOUR=18;BYMINUTE=0", scheduledAt: null, nextRunAt: atLocalTime(0, 18, 0), lastRunAt: atLocalTime(1, 18, 0), cwd: "/demo/WorkBuddy/monitor", workspaceScope: "workspace", spaceId: "demo-space-monitor" },
+          { id: "demo-auto-ppt", definitionKey: "demo-courseware", needsNotificationUpgrade: false, name: "今日新增课件 → 双公众号草稿", prompt: "", status: "PAUSED", scheduleType: "recurring", rrule: "FREQ=HOURLY;INTERVAL=2", scheduledAt: null, nextRunAt: null, lastRunAt: atLocalTime(2, 10, 0), cwd: "/demo/WorkBuddy/courseware", workspaceScope: "task", spaceId: null },
+        ],
+      };
+    }
     case "list_session_groups": {
       if (!groupClient || (groupClient === "codebuddyIde" && !groupScope) || (groupClient !== "codebuddyIde" && groupScope)) {
         throw new Error("会话客户端或档位参数无效");

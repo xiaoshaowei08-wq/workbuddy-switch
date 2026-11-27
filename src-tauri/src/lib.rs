@@ -241,6 +241,7 @@ pub fn run() {
             commands::preview_import_accounts,
             commands::import_accounts,
             commands::switch_account,
+            commands::list_automations,
             commands::list_sessions,
             commands::list_account_sessions,
             commands::copy_sessions,

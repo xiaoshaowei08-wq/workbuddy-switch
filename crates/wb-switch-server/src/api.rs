@@ -18,7 +18,7 @@ use rust_embed::RustEmbed;
 use serde_json::{json, Value};
 
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
+    account, auth_file, automation, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, config, credit_usage, credits,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
@@ -130,6 +130,7 @@ pub fn router() -> Router {
         .route("/api/import", post(api_import))
         .route("/api/switch", post(api_switch))
         .route("/api/switch/progress", get(api_switch_progress))
+        .route("/api/automations", get(api_automations))
         .route("/api/sessions", get(api_sessions))
         .route("/api/sessions/account", get(api_account_sessions))
         .route("/api/sessions/copy", post(api_copy_sessions))
@@ -836,6 +837,12 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
         Ok(selections) => selections,
         Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
     };
+    // 定时任务与桌面端同形（[{id, action}]，action: copy / transfer）。
+    let automation_selections =
+        match automation::parse_automation_selections(body.get("automationSelections")) {
+            Ok(selections) => selections,
+            Err(error) => return json_err(error, StatusCode::BAD_REQUEST),
+        };
 
     {
         let mut running = SWITCH_RUNNING.lock().unwrap();
@@ -858,6 +865,7 @@ async fn api_switch(Json(body): Json<Value>) -> Response {
             share_sessions,
             &copy_ids,
             &sync_selections,
+            &automation_selections,
         )
     })
     .await;
@@ -875,6 +883,17 @@ async fn api_switch_progress() -> Response {
     let p = SWITCH_PROGRESS.lock().unwrap().clone();
     let running = *SWITCH_RUNNING.lock().unwrap();
     json_ok(json!({ "running": running, "progress": p }))
+}
+
+/// GET /api/automations —— 定时任务列表（切号弹窗的勾选来源）。
+///
+/// 缺省取当前登录态；带 `uid` 时列出指定账号可见的任务，供弹窗判断「目标已有」。
+async fn api_automations(RawQuery(query): RawQuery) -> Response {
+    let variant = query_variant(query.as_deref());
+    let uid = query_param(query.as_deref(), "uid");
+    let mut value = automation::list_automations_for_uid(variant, uid.as_deref());
+    value["variant"] = json!(variant.as_str());
+    json_ok(value)
 }
 
 // ---------------------------------------------------------------------------

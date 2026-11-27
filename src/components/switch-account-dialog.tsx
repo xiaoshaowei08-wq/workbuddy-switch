@@ -16,6 +16,10 @@ import {
 import { DialogAutoHeight } from "@/components/ui/dialog-auto-height";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  AutomationTransferSection,
+  type AutomationTransferState,
+} from "@/components/automation-transfer-section";
 import { SessionSyncSection, type SessionLinksMeta } from "@/components/session-sync-section";
 import { SessionTreeList } from "@/components/session-tree";
 import * as api from "@/lib/api";
@@ -92,9 +96,17 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const [syncSelections, setSyncSelections] = useState<SessionSyncSelection[]>([]);
   const [syncGroups, setSyncGroups] = useState<SessionLinkPreviewGroup[]>([]);
   /** 当前 tab：默认关联会话；该 tab 不可用时回落到复制会话。 */
-  const [tab, setTab] = useState<"links" | "copy">("links");
+  const [tab, setTab] = useState<"links" | "copy" | "automations">("links");
   /** 关联会话区块上报的状态：tab 徽标与常驻提示用。 */
   const [linksMeta, setLinksMeta] = useState<SessionLinksMeta | null>(null);
+  /** 定时任务区块上报的勾选与总量。 */
+  const [automation, setAutomation] = useState<AutomationTransferState>({
+    selections: [],
+    total: 0,
+    active: 0,
+    loading: false,
+    error: "",
+  });
 
   const variant = accountVariant(account);
   const accountId = account?.id;
@@ -133,6 +145,7 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     setSyncSelections([]);
     setSyncGroups([]);
     setLinksMeta(null);
+    setAutomation({ selections: [], total: 0, active: 0, loading: false, error: "" });
     setTab("links");
     setLoadingSessions(true);
     void api.listSessions(variant)
@@ -186,12 +199,14 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
     setError("");
     const requestedCopy = selected.size > 0;
     const requestedSync = syncSelections.length > 0;
+    const requestedAutomation = automation.selections.length > 0;
     try {
       const res = await api.switchAccount({
         accountId: account.id,
         copySessionIds: requestedCopy ? [...selected] : undefined,
         // 勾选绑定预览凭据；执行前后端会重新校验，版本变化则跳过该项。
         syncSelections: requestedSync ? syncSelections : undefined,
+        automationSelections: requestedAutomation ? automation.selections : undefined,
       });
       const nickname = displayName(account);
       const parts: string[] = [];
@@ -209,6 +224,17 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       if (syncedItems.length > 0) parts.push(`已同步 ${syncedItems.length} 个会话`);
       if (skippedItems.length > 0) parts.push(`跳过 ${skippedItems.length} 个会话`);
       if (syncErrors.length > 0) parts.push(`会话同步失败 ${syncErrors.length} 个`);
+      // 定时任务：复制 / 转移分开计数，底部摘要与 toast 都要能看出各自多少条。
+      const automationReport = res.automationTransfer;
+      const automationCopied = automationReport?.copied?.length ?? 0;
+      const automationTransferred = automationReport?.transferred?.length ?? 0;
+      const automationSkipped = automationReport?.skipped ?? [];
+      const automationErrors = automationReport?.errors ?? [];
+      const automationNotes = automationReport?.notes ?? [];
+      if (automationCopied > 0) parts.push(`已复制 ${automationCopied} 个定时任务`);
+      if (automationTransferred > 0) parts.push(`已转移 ${automationTransferred} 个定时任务`);
+      if (automationSkipped.length > 0) parts.push(`跳过 ${automationSkipped.length} 个定时任务`);
+      if (automationErrors.length > 0) parts.push(`定时任务失败 ${automationErrors.length} 个`);
       if (res.backup) parts.push(`备份: ${res.backup}`);
       // 成功清理：临时备份已回收，不再展示可还原路径；待清理项单独提示，不写进成功文案。
       toast.success(`已切换至「${nickname}」`, {
@@ -251,6 +277,34 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
       } else if (requestedSync && !syncReport) {
         toast.warning("会话同步未执行", {
           description: "没有收到同步结果：当前版本可能不支持同步会话，或本次切换没有重启应用。",
+        });
+      }
+      // 定时任务：失败、跳过与「降级 / 过期」都要单独说清楚，不能只报成功数。
+      const automationLabel = (item: { sourceId?: string; name?: string }) =>
+        item.name || item.sourceId || "定时任务";
+      if (automationErrors.length > 0) {
+        toast.error("部分定时任务未处理", {
+          description: automationErrors
+            .map((item) => `${automationLabel(item)}：${item.error}`)
+            .join("；"),
+        });
+      } else if (requestedAutomation && !automationReport) {
+        toast.warning("定时任务未处理", {
+          description: "没有收到处理结果：当前版本可能不支持定时任务，任务没有复制也没有转移。",
+        });
+      }
+      if (automationSkipped.length > 0) {
+        toast.warning("有定时任务被跳过", {
+          description: automationSkipped
+            .map((item) => `${automationLabel(item)}：${item.message}`)
+            .join("；"),
+        });
+      }
+      if (automationNotes.length > 0) {
+        toast.info("定时任务已处理，有几点要注意", {
+          description: automationNotes
+            .map((item) => `${automationLabel(item)}：${item.message}`)
+            .join("；"),
         });
       }
       if (syncReport?.needsRecovery) {
@@ -361,24 +415,29 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
   const syncCount = syncSelections.length;
   /** 覆盖项数量：底部摘要据此提示风险。 */
   const overwriteCount = syncSelections.filter((item) => item.mode === "overwrite").length;
+  const automationCopyCount = automation.selections.filter((item) => item.action === "copy").length;
+  const automationTransferCount = automation.selections.filter(
+    (item) => item.action === "transfer",
+  ).length;
+  const automationCount = automation.selections.length;
   const linksAvailable = linksMeta?.available ?? true;
+  const summaryParts: string[] = [];
+  if (copyCount > 0) summaryParts.push(`复制 ${copyCount} 个会话`);
+  if (syncCount > 0) summaryParts.push(`同步 ${syncCount} 个关联会话`);
+  if (automationCopyCount > 0) summaryParts.push(`复制 ${automationCopyCount} 个定时任务`);
+  if (automationTransferCount > 0) summaryParts.push(`转移 ${automationTransferCount} 个定时任务`);
   const summaryMain =
-    copyCount > 0 && syncCount > 0
-      ? `将复制 ${copyCount} 个、同步 ${syncCount} 个关联会话`
-      : copyCount > 0
-        ? `将复制 ${copyCount} 个会话`
-        : syncCount > 0
-          ? `将同步 ${syncCount} 个关联会话`
-          : "本次仅切换账号";
+    summaryParts.length > 0 ? `将${summaryParts.join("、")}` : "本次仅切换账号";
+  const nothingSelected = copyCount === 0 && syncCount === 0 && automationCount === 0;
   const summarySub =
     overwriteCount > 0
       ? `其中 ${overwriteCount} 个会替换目标账号的完整内容`
-      : copyCount === 0 && syncCount === 0
-        ? "未选择复制或同步会话"
-        : copyCount === 0
-          ? "未选择复制会话"
-          : syncCount === 0
-            ? "未选择同步会话"
+      : nothingSelected
+        ? "未选择复制、同步会话或处理定时任务"
+        : copyCount === 0 && syncCount === 0
+          ? "未选择复制或同步会话"
+          : automationCount === 0
+            ? "未选择定时任务"
             : null;
   const needsPermission = error.includes("无权限");
   const sessionsEmpty = !loadingSessions && sessions.length === 0;
@@ -525,23 +584,29 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
             </Alert>
           )}
 
-          {linksAvailable ? (
-            <Tabs
-              value={tab}
-              onValueChange={(value) => setTab(value as "links" | "copy")}
-              className="flex min-h-0 flex-col gap-3 overflow-hidden"
-            >
-              <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
+          {/* 三个 tab 始终并存：关联会话在能力不可用时整条不渲染，不额外分叉一套布局。 */}
+          <Tabs
+            value={tab}
+            onValueChange={(value) => setTab(value as "links" | "copy" | "automations")}
+            className="flex min-h-0 flex-col gap-3 overflow-hidden"
+          >
+            <TabsList className="h-auto w-full shrink-0 justify-start gap-5 rounded-none border-b border-border bg-transparent p-0">
+              {linksAvailable && (
                 <TabsTrigger value="links" className={TAB_TRIGGER_CLASS}>
                   关联会话
                   {tabCount(linksMeta?.groupCount ?? 0)}
                 </TabsTrigger>
-                <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
-                  复制会话
-                  {tabCount(copyCount)}
-                </TabsTrigger>
-              </TabsList>
-              {/* forceMount：切换 tab 不得卸载另一侧，否则关联勾选会被预览重拉重置。 */}
+              )}
+              <TabsTrigger value="copy" className={TAB_TRIGGER_CLASS}>
+                复制会话
+                {tabCount(copyCount)}
+              </TabsTrigger>
+              <TabsTrigger value="automations" className={TAB_TRIGGER_CLASS}>
+                定时任务
+                {tabCount(automationCount)}
+              </TabsTrigger>
+            </TabsList>
+            {linksAvailable && (
               <TabsContent
                 value="links"
                 forceMount
@@ -558,17 +623,27 @@ export function SwitchAccountDialog({ open, onOpenChange, account, onDone }: Pro
                   onMetaChange={setLinksMeta}
                 />
               </TabsContent>
-              <TabsContent
-                value="copy"
-                forceMount
-                className="min-h-0 space-y-2 overflow-y-auto data-[state=inactive]:hidden data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:duration-150"
-              >
-                {copyTabContent}
-              </TabsContent>
-            </Tabs>
-          ) : (
-            <div className="min-h-0 space-y-2 overflow-y-auto">{copyTabContent}</div>
-          )}
+            )}
+            <TabsContent
+              value="copy"
+              forceMount
+              className="min-h-0 space-y-2 overflow-y-auto data-[state=inactive]:hidden data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:duration-150"
+            >
+              {copyTabContent}
+            </TabsContent>
+            <TabsContent
+              value="automations"
+              forceMount
+              className="min-h-0 space-y-2 overflow-y-auto data-[state=inactive]:hidden data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:duration-150"
+            >
+              <AutomationTransferSection
+                open={open}
+                account={account}
+                disabled={busy}
+                onChange={setAutomation}
+              />
+            </TabsContent>
+          </Tabs>
         </div>
 
         <DialogFooter className="shrink-0 sm:justify-between">

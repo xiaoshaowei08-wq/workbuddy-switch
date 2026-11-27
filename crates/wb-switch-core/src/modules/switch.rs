@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 
 use crate::modules::account;
 use crate::modules::auth_file;
+use crate::modules::automation::{self, AutomationSelection};
 use crate::modules::process::{close_workbuddy, launch_workbuddy};
 use crate::modules::session::{self, SessionPaths, SyncSelection};
 use crate::modules::session_link::{
@@ -35,6 +36,9 @@ pub const COPY_WITHOUT_RESTART_MESSAGE: &str =
     "本次切换未重启 WorkBuddy（restart=false），已拒绝会话复制请求；如需复制请勾选重启切换";
 pub const SYNC_WITHOUT_RESTART_MESSAGE: &str =
     "本次切换未重启 WorkBuddy（restart=false），已拒绝会话同步请求；如需同步请勾选重启切换";
+/// 定时任务同样只能在关闭客户端后写库，restart=false 时显式拒绝而不是静默丢弃。
+pub const AUTOMATION_WITHOUT_RESTART_MESSAGE: &str =
+    "本次切换未重启 WorkBuddy（restart=false），已拒绝定时任务处理请求；如需处理请勾选重启切换";
 
 /// 恢复报告里是否存在阻碍启动的问题：未恢复一致的中间产物必须先处理。
 ///
@@ -138,6 +142,10 @@ fn reject_session_writes_without_restart(
 /// `copy_session_ids` 非空时按路径 B 复制勾选会话（新 id，云端可同步）；
 /// `sync_selections` 非空时把来源账号的新增内容同步到目标账号的关联会话（保留目标
 /// sessionId、标题与自定义标题）。两者共用同一把档位操作锁，顺序执行、不重复写入。
+///
+/// `automation_selections` 非空时把勾选的定时任务复制 / 转移给目标账号：任务的可见性
+/// 与派发都由 `automations.owner_user_id` 决定，切号只换 auth 文件不会带走它们。
+/// 与会话写入一样必须在客户端关闭之后落库，所以只在 `restart=true` 时执行。
 pub fn switch_account(
     progress_fn: Option<&ProgressFn>,
     account_id: &str,
@@ -145,6 +153,7 @@ pub fn switch_account(
     share_sessions: bool,
     copy_session_ids: &[String],
     sync_selections: &[SyncSelection],
+    automation_selections: &[AutomationSelection],
 ) -> Result<Value, String> {
     let progress = |message: &str| {
         eprintln!("[switch] progress: {message}");
@@ -164,6 +173,7 @@ pub fn switch_account(
     let mut session_report: Option<Value> = None;
     let mut sync_report: Option<Value> = None;
     let mut recovery_report: Option<Value> = None;
+    let mut automation_report: Option<Value> = None;
     if restart {
         progress("正在关闭 WorkBuddy…");
         close_workbuddy(variant, 20)?;
@@ -260,6 +270,29 @@ pub fn switch_account(
                 ));
             }
         }
+        // 定时任务：在会话写入与阻断检查之后、写认证之前落库。
+        // 任务失败只进报告、不阻断切号（与会话复制同口径）；结构性失败也不放弃切换，
+        // 否则一次库打不开就让用户卡在旧账号上。
+        if !automation_selections.is_empty() {
+            progress("正在处理定时任务…");
+            let source_uid = session::current_user_uid(variant).unwrap_or_default();
+            let target_uid = account::get_str(&acc, "uid").unwrap_or_default();
+            automation_report = match automation::apply_for_switch(
+                variant,
+                &source_uid,
+                &target_uid,
+                automation_selections,
+            ) {
+                Ok(report) => report,
+                Err(error) => Some(json!({
+                    "copied": [],
+                    "transferred": [],
+                    "skipped": [],
+                    "errors": [{ "error": error }],
+                    "notes": [],
+                })),
+            };
+        }
     } else {
         // restart=false 表示本次不做任何会话写入；携带写入意图时显式拒绝该会话操作，
         // 不能静默丢弃（design §4.1）。
@@ -269,6 +302,15 @@ pub fn switch_account(
         );
         copy_report = copy;
         sync_report = sync;
+        if !automation_selections.is_empty() {
+            automation_report = Some(json!({
+                "copied": [],
+                "transferred": [],
+                "skipped": [],
+                "errors": [{ "error": AUTOMATION_WITHOUT_RESTART_MESSAGE }],
+                "notes": [],
+            }));
+        }
     }
     progress("正在写入认证文件…");
     auth_file::write_account_to_auth_file(&acc, variant)?;
@@ -295,6 +337,9 @@ pub fn switch_account(
     }
     if let Some(r) = recovery_report {
         result["sessionRecovery"] = r;
+    }
+    if let Some(a) = automation_report {
+        result["automationTransfer"] = a;
     }
     Ok(result)
 }

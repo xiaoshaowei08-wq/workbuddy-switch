@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use tauri::Emitter;
 use wb_switch_core::modules::{
-    account, auth_file, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
+    account, auth_file, automation, checkin, codebuddy_cli, codebuddy_cn_ide, codebuddy_ide,
     codebuddy_ide_session, codebuddy_ide_session_sync, credit_usage, credits, error_log,
     export_import, jetbrains, limits, notifications, oauth, process, rate_limit_events,
     rate_limit_hook, refresh, rotate, session, session_groups, switch, token_stats, travel, update,
@@ -564,9 +564,10 @@ pub fn reveal_app_in_finder() -> Result<(), String> {
     Ok(())
 }
 
-/// POST /api/switch —— 切换账号（备份 → 关进程 → 恢复/复制/同步会话 → 写认证 → 重启）。
+/// POST /api/switch —— 切换账号（备份 → 关进程 → 恢复/复制/同步会话 → 定时任务 → 写认证 → 重启）。
 ///
-/// `syncSelections` 与 HTTP 端同形（`[{groupId, previewToken, mode}]`）。
+/// `syncSelections` 与 HTTP 端同形（`[{groupId, previewToken, mode}]`）；
+/// `automationSelections` 为 `[{id, action}]`（action: copy / transfer）。
 ///
 /// async + spawn_blocking：切换中关闭/启动 WorkBuddy 会阻塞数十秒，
 /// 若在同步 command（主线程）执行会卡死整个 UI（loading 遮罩无法渲染）。
@@ -578,6 +579,7 @@ pub async fn switch_account(
     share_sessions: Option<bool>,
     copy_session_ids: Option<Vec<String>>,
     sync_selections: Option<Value>,
+    automation_selections: Option<Value>,
 ) -> Result<Value, String> {
     if account_id.trim().is_empty() {
         return Err("缺少 accountId".to_string());
@@ -588,6 +590,8 @@ pub async fn switch_account(
     // 入参形状由 core 校验（缺 groupId / previewToken / mode 一律拒绝）；这里只做透传，
     // 不在命令层做业务判定。
     let sync_selections = session::parse_sync_selections(sync_selections.as_ref())?;
+    let automation_selections =
+        automation::parse_automation_selections(automation_selections.as_ref())?;
     let progress: switch::ProgressFn = Box::new(move |message| {
         let _ = app.emit("switch-progress", json!({ "message": message }));
     });
@@ -599,10 +603,19 @@ pub async fn switch_account(
             share_sessions,
             &copy_ids,
             &sync_selections,
+            &automation_selections,
         )
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// GET /api/automations —— 定时任务列表（切号弹窗的勾选来源）。
+///
+/// 缺省取当前登录态；带 `uid` 时列出指定账号可见的任务，供弹窗判断「目标已有」。
+#[tauri::command]
+pub fn list_automations(variant: Option<String>, uid: Option<String>) -> Value {
+    automation::list_automations_for_uid(WbVariant::parse(variant.as_deref()), uid.as_deref())
 }
 
 /// GET /api/sessions —— 当前账号的会话列表（`variant` 缺省国内版）。

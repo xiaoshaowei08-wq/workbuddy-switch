@@ -430,6 +430,54 @@ export interface SwitchResult {
   /** 本次的会话同步报告（未勾选同步时不返回）；含跳过与失败原因，不只是成功数。 */
   sessionSync?: SessionSyncReport;
   sessionRecovery?: SessionRecoveryReport;
+  /** 本次的定时任务处理报告（未勾选任务时不返回）。 */
+  automationTransfer?: AutomationTransferReport;
+}
+
+/**
+ * 定时任务（切号弹窗的勾选对象）。
+ *
+ * 任务的可见性与到点派发都由 `automations.owner_user_id` 决定：切号只换 auth 文件，
+ * 不会带走任务，所以旧账号的任务在新账号下既看不到也不会执行。
+ */
+export interface AutomationItem {
+  id: string;
+  /** 任务定义指纹：与落库去重同一口径，用于判断目标账号是否已有同一任务。 */
+  definitionKey: string;
+  /** 带通知开关但还没写入任务级 Webhook：切号时补写一次。 */
+  needsNotificationUpgrade: boolean;
+  name: string;
+  prompt: string;
+  /** ACTIVE / PAUSED。 */
+  status: string;
+  /** recurring / once。 */
+  scheduleType: string;
+  rrule: string;
+  scheduledAt: string | null;
+  nextRunAt: number | null;
+  lastRunAt: number | null;
+  /** 第一个工作目录（cwds[0]）。 */
+  cwd: string | null;
+  workspaceScope: string | null;
+  spaceId: string | null;
+}
+
+/** 复制：新 id、源账号保留；转移：改归属、源账号失去。 */
+export type AutomationAction = "copy" | "transfer";
+
+export interface AutomationSelection {
+  id: string;
+  action: AutomationAction;
+}
+
+export interface AutomationTransferReport {
+  copied: { sourceId: string; targetId: string; name: string }[];
+  transferred: { sourceId: string; name: string }[];
+  skipped: { sourceId: string; name?: string; message: string }[];
+  errors: { sourceId?: string; name?: string; error: string }[];
+  /** 需要告知但不构成失败的事（空间降级、一次性任务已过期等）。 */
+  notes: { sourceId?: string; name?: string; message: string }[];
+  backup?: string | null;
 }
 
 export interface CheckinConfig {
